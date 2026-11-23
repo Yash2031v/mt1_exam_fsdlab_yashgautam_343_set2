@@ -1,10 +1,10 @@
 const express = require("express");
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// In-memory store initialized with Set A records
 let books = [
   {
     id: 101,
@@ -32,140 +32,150 @@ let books = [
   },
 ];
 
-let nextId = 104;
+let currentId = 104;
 
-// Helper to validate book payload
-function validateBookPayload(body) {
-  if (!body || typeof body !== "object") {
-    return "Request body must be a valid JSON object.";
+function parseBookId(rawId) {
+  // Ensure the entire param is digits so values like "101abc" don't slip through
+  if (!/^\d+$/.test(String(rawId))) {
+    return null;
+  }
+  const parsed = Number(rawId);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function checkBookInput(data) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return "Body must be a JSON object";
   }
 
-  const { title, author, genre, publishedYear, available } = body;
+  const title = typeof data.title === "string" ? data.title.trim() : "";
+  const author = typeof data.author === "string" ? data.author.trim() : "";
+  const genre = typeof data.genre === "string" ? data.genre.trim() : "";
+  const publishedYear = data.publishedYear;
+  const available = data.available;
 
-  if (typeof title !== "string" || title.trim() === "") {
-    return "Field 'title' is required and must be a non-empty string.";
+  if (!title) return "title is required";
+  if (!author) return "author is required";
+  if (!genre) return "genre is required";
+
+  if (
+    typeof publishedYear !== "number" ||
+    !Number.isInteger(publishedYear) ||
+    publishedYear < 0
+  ) {
+    return "publishedYear must be a valid number";
   }
-  if (typeof author !== "string" || author.trim() === "") {
-    return "Field 'author' is required and must be a non-empty string.";
-  }
-  if (typeof genre !== "string" || genre.trim() === "") {
-    return "Field 'genre' is required and must be a non-empty string.";
-  }
-  if (typeof publishedYear !== "number" || Number.isNaN(publishedYear)) {
-    return "Field 'publishedYear' is required and must be a number.";
-  }
+
   if (typeof available !== "boolean") {
-    return "Field 'available' is required and must be a boolean.";
+    return "available must be true or false";
   }
 
   return null;
 }
 
-// 1. GET all books
+function buildBookRecord(id, data) {
+  return {
+    id,
+    title: data.title.trim(),
+    author: data.author.trim(),
+    genre: data.genre.trim(),
+    publishedYear: data.publishedYear,
+    available: data.available,
+  };
+}
+
+// All books
 app.get("/api/books", (req, res) => {
-  return res.status(200).json(books);
+  res.status(200).json(books);
 });
 
-// 6. Filter books by author (MUST be declared before /api/books/:id)
+// Filter must come before /:id so "filter" is not read as a book id
 app.get("/api/books/filter", (req, res) => {
-  const { author } = req.query;
+  const authorQuery =
+    typeof req.query.author === "string" ? req.query.author.trim().toLowerCase() : "";
 
-  if (typeof author !== "string" || author.trim() === "") {
+  if (!authorQuery) {
     return res.status(200).json([]);
   }
 
-  const searchTerm = author.trim().toLowerCase();
-  const filteredBooks = books.filter(
-    (book) => book.author.toLowerCase() === searchTerm
+  const result = books.filter(
+    (item) => item.author.toLowerCase() === authorQuery
   );
 
-  return res.status(200).json(filteredBooks);
+  res.status(200).json(result);
 });
 
-// 3. GET book by ID
+// Single book by id
 app.get("/api/books/:id", (req, res) => {
-  const bookId = Number(req.params.id);
-  if (Number.isNaN(bookId)) {
-    return res.status(400).json({ error: "Invalid book ID format." });
+  const id = parseBookId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ message: "Invalid book id" });
   }
 
-  const book = books.find((b) => b.id === bookId);
-  if (!book) {
-    return res.status(404).json({ error: `Book with ID ${bookId} not found.` });
+  const found = books.find((item) => item.id === id);
+  if (!found) {
+    return res.status(404).json({ message: "Book not found" });
   }
 
-  return res.status(200).json(book);
+  res.status(200).json(found);
 });
 
-// 2. POST a new book
+// Add new book
 app.post("/api/books", (req, res) => {
-  const errorMessage = validateBookPayload(req.body);
-  if (errorMessage) {
-    return res.status(400).json({ error: errorMessage });
+  const validationError = checkBookInput(req.body);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
   }
 
-  const newBook = {
-    id: nextId++,
-    title: req.body.title.trim(),
-    author: req.body.author.trim(),
-    genre: req.body.genre.trim(),
-    publishedYear: req.body.publishedYear,
-    available: req.body.available,
-  };
+  const created = buildBookRecord(currentId, req.body);
+  currentId += 1;
+  books.push(created);
 
-  books.push(newBook);
-  return res.status(201).json(newBook);
+  res.status(201).json(created);
 });
 
-// 4. PUT / update a book by ID
+// Update existing book
 app.put("/api/books/:id", (req, res) => {
-  const bookId = Number(req.params.id);
-  if (Number.isNaN(bookId)) {
-    return res.status(400).json({ error: "Invalid book ID format." });
+  const id = parseBookId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ message: "Invalid book id" });
   }
 
-  const bookIndex = books.findIndex((b) => b.id === bookId);
-  if (bookIndex === -1) {
-    return res.status(404).json({ error: `Book with ID ${bookId} not found.` });
+  const idx = books.findIndex((item) => item.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ message: "Book not found" });
   }
 
-  const errorMessage = validateBookPayload(req.body);
-  if (errorMessage) {
-    return res.status(400).json({ error: errorMessage });
+  const validationError = checkBookInput(req.body);
+  if (validationError) {
+    return res.status(400).json({ message: validationError });
   }
 
-  const updatedBook = {
-    id: bookId,
-    title: req.body.title.trim(),
-    author: req.body.author.trim(),
-    genre: req.body.genre.trim(),
-    publishedYear: req.body.publishedYear,
-    available: req.body.available,
-  };
+  const updated = buildBookRecord(id, req.body);
+  books[idx] = updated;
 
-  books[bookIndex] = updatedBook;
-  return res.status(200).json(updatedBook);
+  res.status(200).json(updated);
 });
 
-// 5. DELETE a book by ID
+// Delete book
 app.delete("/api/books/:id", (req, res) => {
-  const bookId = Number(req.params.id);
-  if (Number.isNaN(bookId)) {
-    return res.status(400).json({ error: "Invalid book ID format." });
+  const id = parseBookId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ message: "Invalid book id" });
   }
 
-  const bookIndex = books.findIndex((b) => b.id === bookId);
-  if (bookIndex === -1) {
-    return res.status(404).json({ error: `Book with ID ${bookId} not found.` });
+  const idx = books.findIndex((item) => item.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ message: "Book not found" });
   }
 
-  const deletedBook = books.splice(bookIndex, 1)[0];
-  return res.status(200).json({
-    message: `Book with ID ${bookId} deleted successfully.`,
-    deletedBook,
+  const [removed] = books.splice(idx, 1);
+  res.status(200).json({
+    message: "Book deleted successfully",
+    book: removed,
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Library Book Management API running on http://localhost:${PORT}`);
+  console.log(`Server started on port ${PORT}`);
 });
